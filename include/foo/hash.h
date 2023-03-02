@@ -11,29 +11,25 @@
 #include <syslog.h>
 
 #ifndef CONCAT
-#define CONCAT(x, y)        x##y
+#define CONCAT(x, y)            x##y
 #endif
 #ifndef XCONCAT
-#define XCONCAT(x, y)       CONCAT(x, y)
+#define XCONCAT(x, y)           CONCAT(x, y)
 #endif
 #ifndef AUTONAME
-#define AUTONAME            XCONCAT(_autoname_, __COUNTER__)
+#define AUTONAME                XCONCAT(_autoname_, __COUNTER__)
 #endif
 
 #if !defined(likely)
-#define likely(x)           __builtin_expect(!!(x),1)
+#define likely(x)               __builtin_expect(!!(x),1)
 #endif
 #if !defined(unlikely)
-#define unlikely(x)         __builtin_expect(!!(x),0)
+#define unlikely(x)             __builtin_expect(!!(x),0)
 #endif
 
-#ifndef roundup2
-#define roundup2_(x, y, x_, y_) ({ \
-            __auto_type x_ = (x); \
-            __auto_type y_ = (y); \
-            (x_ + (y_ - 1)) & ~(y_ - 1); \
-        })
-#define roundup2(x, y)  roundup2_(x, y, AUTONAME, AUTONAME)
+#ifndef roundup
+#define roundup_(x, y, y_)      ({ __auto_type y_ = (y); (((x) + (y_ - 1)) / y_) * y_; })
+#define roundup(x, y)           roundup_(x, y, AUTONAME)
 #endif
 
 #ifndef ALIGNED_ALLOC
@@ -84,7 +80,7 @@
         })
 
 #define hash_taboffset(T, cap) ({ \
-            roundup2(8 * offsetof(struct hash_s(T), bitmap) + (cap), 8 * hash_align(T)) / 8; \
+            roundup(8 * offsetof(struct hash_s(T), bitmap) + (cap), 8 * hash_align(T)) / 8; \
         })
 
 #define hash_tab_(T, h, h_) ({ \

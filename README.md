@@ -6,7 +6,7 @@ of C++ language templates).
 Example of use:
 
 [mytype.h]
----------------------------------------------------------------------------------------------
+```
 #ifndef __MYTYPE_H_INCLUDED__
 #define __MYTYPE_H_INCLUDED__
 
@@ -29,10 +29,10 @@ Example of use:
 typedef struct { long x; } mytype_t;
 hash_decl(mytype_t);
 #endif
-
+```
 
 [mytype.c]
----------------------------------------------------------------------------------------------
+```
 #include "mytype.h"
 
 /* int  T_hashfn(const T *);
@@ -62,10 +62,11 @@ static inline void mytype_t_dump(const mytype_t *g, FILE *fp) {
 }
 hash_defn(mytype_t_t, mytype_t_hashfn, mytype_t_init, mytype_t_fini, \
     mytype_t_cmp, mytype_t_swap, mytype_t_dump);
+```
 
 
 [main.c]
----------------------------------------------------------------------------------------------
+```
 ...
 #include <mytype.h>
 ...
@@ -94,5 +95,6 @@ int main() {
 
     return 0;
 }
+```
 
-$Id: README.md,v 1.1 2023/03/02 16:15:56 swp Exp $
+`$Id: README.md,v 1.1 2023/03/02 16:15:56 swp Exp $`

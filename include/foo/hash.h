@@ -10,8 +10,6 @@
 #include <search.h>
 #include <syslog.h>
 
-#include <foo/ectl.h>
-
 #ifndef CONCAT
 #define CONCAT(x, y)        x##y
 #endif
@@ -57,9 +55,9 @@
 #define hash_t(T)                       XCONCAT(T, _hash_t)
 #define hash_s(T)                       XCONCAT(T, _hash_s)
 #define hash_create(T, n)               XCONCAT(T, _hash_create)(n)
-#define hash_destroy(T, hp)             XCONCAT(T, _hash_destroy)(hp)
+#define hash_destroy(T, h)              XCONCAT(T, _hash_destroy)(h)
 #define hash_search(T, hp, elm, act)    XCONCAT(T, _hash_search)(hp, elm, act)
-#define hash_remove(T, hp, elm)         XCONCAT(T, _hash_remove)(hp, elm)
+#define hash_remove(T, h, elm)          XCONCAT(T, _hash_remove)(h, elm)
 #define hash_dump(T, h, fp)             XCONCAT(T, _hash_dump)(h, fp)
 
 /* int  T_hashfn(const T *);
@@ -76,7 +74,7 @@
     } *hash_t(T); \
     \
     hash_t(T)   XCONCAT(T, _hash_create)(int cap); \
-    void        XCONCAT(T, _hash_destroy)(hash_t(T) *h); \
+    void        XCONCAT(T, _hash_destroy)(hash_t(T) h); \
     T *         XCONCAT(T, _hash_search)(hash_t(T) *h, T *elm, ACTION action); \
     void        XCONCAT(T, _hash_remove)(hash_t(T) h, T *elm); \
     void        XCONCAT(T, _hash_dump)(hash_t(T) h, FILE *fp)
@@ -120,12 +118,12 @@
         return h; \
     } \
     \
-    void XCONCAT(T, _hash_destroy)(hash_t(T) *h) { \
-        if (likely(h && *h)) { \
-            int cap = (*h)->cap; \
-            T *tab = hash_tab(T, *h); \
+    void XCONCAT(T, _hash_destroy)(hash_t(T) h) { \
+        if (likely(h)) { \
+            int cap = h->cap; \
+            T *tab = hash_tab(T, h); \
             int i = cap - 1; \
-            unsigned int *mp = (*h)->bitmap + (i / (8 * sizeof(unsigned int))); \
+            unsigned int *mp = h->bitmap + (i / (8 * sizeof(unsigned int))); \
             unsigned int m = *mp; \
             unsigned int bm = 1u << (i % (8 * sizeof(unsigned int))); \
             do { \
@@ -141,7 +139,7 @@
                 bm = 1u << (8 * sizeof(unsigned int) - 1); \
             } while (1); \
         L_endloop: \
-            free(*h), *h = NULL; \
+            free(h); \
         } \
     } \
     \
@@ -176,13 +174,13 @@
                 } \
                 bi = 0, bm = 1u, m = *++mp; \
             } while (1); \
-            hash_destroy(T, h); \
+            hash_destroy(T, *h); \
             *h = h2; \
         } \
         return rp; \
         \
     L_err: \
-        hash_destroy(T, &h2); \
+        hash_destroy(T, h2); \
         return NULL; \
     } \
     \
@@ -290,11 +288,6 @@
         fprintf(stdout, "    }\n}\n"); \
     } \
     struct __hack
-
-
-
-//for (int i_ = (p = hash_tab(T, h), 0); i_ < h->cap/(8*sizeof(unsigned int)); i_++)
-//    if (h->bitmap[i_ % (8 * sizeof(unsigned int))] & (1u << (i_ % (8 * sizeof(unsigned int)))))
 
 #define HASH_FOREACH_(T, p, h, ctx_) \
     for ( \

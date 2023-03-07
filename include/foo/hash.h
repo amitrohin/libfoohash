@@ -136,7 +136,6 @@ _Static_assert(HASH_SCHLIM > 1 && HASH_SCHLIM < HASH_CAPMIN, "Search limit is wr
                 m = *--mp; \
                 bm = 1u << (8 * sizeof(unsigned int) - 1); \
             } while (1); \
-        L_endloop: \
             free(h); \
         } \
     } \

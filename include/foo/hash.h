@@ -10,6 +10,12 @@
 #include <search.h>
 #include <syslog.h>
 
+#if defined(__has_include)
+#   if __has_include(<foo/ectl.h>)
+#       include <foo/ectl.h>
+#   endif
+#endif
+
 #ifndef CONCAT
 #define CONCAT(x, y)            x##y
 #endif
@@ -45,8 +51,9 @@
 #define ALIGNED_ALLOC(a, n) ALIGNED_ALLOC_(a, n, AUTONAME, AUTONAME, AUTONAME)
 #endif
 
-#define HASH_CAPMIN                     (((8 * sizeof(unsigned int)) << 1) - 1)
-#define HASH_SCHLIM                     (8 * sizeof(unsigned int)) /* [!] не может быть меньше 2 */
+#define HASH_CAPMIN                     63
+#define HASH_SCHLIM                     16
+_Static_assert(HASH_SCHLIM > 1 && HASH_SCHLIM < HASH_CAPMIN, "Search limit is wrong.");
 
 #define hash_t(T)                       XCONCAT(T, _hash_t)
 #define hash_s(T)                       XCONCAT(T, _hash_s)
@@ -54,26 +61,30 @@
 #define hash_destroy(T, h)              XCONCAT(T, _hash_destroy)(h)
 #define hash_search(T, hp, elm, act)    XCONCAT(T, _hash_search)(hp, elm, act)
 #define hash_remove(T, h, elm)          XCONCAT(T, _hash_remove)(h, elm)
+#define hash_popcount(T, h)             XCONCAT(T, _hash_popcount)(h)
 #define hash_dump(T, h, fp)             XCONCAT(T, _hash_dump)(h, fp)
 
 /* int  T_hashfn(const T *);
  * int  T_init(T *);
  * void T_fini(T *);
- * int  T_cmp(const T *, const T *);
+ * int  T_eq(const T *, const T *);
  * void T_swap(T *, T *);
  * void T_dump(T *, FILE *);
  */
-#define hash_decl(T) \
+#define hash_decl_(T, Static_) \
     typedef struct hash_s(T) { \
         int cap; \
         unsigned int bitmap[]; \
     } *hash_t(T); \
     \
-    hash_t(T)   XCONCAT(T, _hash_create)(int cap); \
-    void        XCONCAT(T, _hash_destroy)(hash_t(T) h); \
-    T *         XCONCAT(T, _hash_search)(hash_t(T) *h, T *elm, ACTION action); \
-    void        XCONCAT(T, _hash_remove)(hash_t(T) h, T *elm); \
-    void        XCONCAT(T, _hash_dump)(hash_t(T) h, FILE *fp)
+    Static_ hash_t(T)   XCONCAT(T, _hash_create)(int cap); \
+    Static_ void        XCONCAT(T, _hash_destroy)(hash_t(T) h); \
+    Static_ T *         XCONCAT(T, _hash_search)(hash_t(T) *h, T *elm, ACTION action); \
+    Static_ void        XCONCAT(T, _hash_remove)(hash_t(T) h, T *elm); \
+    Static_ int         XCONCAT(T, _hash_popcount)(hash_t(T) h); \
+    Static_ void        XCONCAT(T, _hash_dump)(hash_t(T) h, FILE *fp)
+#define hash_decl(T)        hash_decl_(T, )
+#define hash_decl_static(T) hash_decl_(T, static)
 
 #define hash_align(T) ({ \
             alignof(T) < alignof(unsigned int) ? alignof(unsigned int) : alignof(T); \
@@ -92,17 +103,8 @@
             (hash_taboffset(T, cap) - offsetof(struct hash_s(T), bitmap)) / sizeof(unsigned int); \
         })
 
-#define hash_defn(T, T_hashfn, T_init, T_fini, T_cmp, T_swap, T_dump) \
-    static inline int XCONCAT(T, _hash_elm_cmp)(const hash_t(T) h, const T *a, const T *b) { \
-        int cap = h->cap; \
-        int ka = T_hashfn(a) % cap; \
-        int kb = T_hashfn(b) % cap; \
-        if (ka != kb) \
-            return ka - kb; \
-        return T_cmp(a, b); \
-    } \
-    \
-    hash_t(T) XCONCAT(T, _hash_create)(int cap) { \
+#define hash_defn_(T, Static_, T_hashfn, T_init, T_fini, T_eq, T_swap, T_dump) \
+    Static_ hash_t(T) XCONCAT(T, _hash_create)(int cap) { \
         if (cap < HASH_CAPMIN) \
             cap = HASH_CAPMIN; \
         int tab_offset = hash_taboffset(T, cap); \
@@ -114,7 +116,7 @@
         return h; \
     } \
     \
-    void XCONCAT(T, _hash_destroy)(hash_t(T) h) { \
+    Static_ void XCONCAT(T, _hash_destroy)(hash_t(T) h) { \
         if (likely(h)) { \
             int cap = h->cap; \
             T *tab = hash_tab(T, h); \
@@ -180,7 +182,7 @@
         return NULL; \
     } \
     \
-    T *XCONCAT(T, _hash_search)(hash_t(T) *h, T *elm, ACTION action) { \
+    Static_ T *XCONCAT(T, _hash_search)(hash_t(T) *h, T *elm, ACTION action) { \
         int cap = (*h)->cap; \
         int k = T_hashfn(elm) % cap; \
         T *tab = hash_tab(T, *h); \
@@ -197,7 +199,7 @@
                 } \
                 break; \
             } \
-            if (!XCONCAT(T, _hash_elm_cmp)(*h, tab + i, elm)) \
+            if (T_eq(tab + i, elm)) \
                 return tab + i; \
             if (unlikely(!--lim)) { \
                 if (action == FIND) \
@@ -221,7 +223,7 @@
         return NULL; \
     } \
     \
-    void XCONCAT(T, _hash_remove)(hash_t(T) h, T *elm) { \
+    Static_ void XCONCAT(T, _hash_remove)(hash_t(T) h, T *elm) { \
         int cap = h->cap; \
         unsigned int *bitmap = h->bitmap; \
         T *tab = hash_tab(T, h); \
@@ -253,7 +255,14 @@
         T_fini(tab + i); \
     } \
     \
-    void XCONCAT(T, _hash_dump)(hash_t(T) h, FILE *fp) { \
+    Static_ int  XCONCAT(T, _hash_popcount)(hash_t(T) h) { \
+        int c = 0; \
+        for (int i = 0, n = hash_bitmapcap(T, h->cap); i < n; i++) \
+            c += __builtin_popcount(h->bitmap[i]); \
+        return c; \
+    } \
+    \
+    Static_ void XCONCAT(T, _hash_dump)(hash_t(T) h, FILE *fp) { \
         int bitmap_cap = hash_bitmapcap(T, h->cap); \
         T *tab = hash_tab(T, h); \
         fprintf(stdout, "hash@%p => { (%td)cap: %d, (%td)bitmap@%p[%d]: %#x", \
@@ -284,6 +293,10 @@
         fprintf(stdout, "    }\n}\n"); \
     } \
     struct __hack
+#define hash_defn(T, T_hashfn, T_init, T_fini, T_eq, T_swap, T_dump) \
+    hash_defn_(T, , T_hashfn, T_init, T_fini, T_eq, T_swap, T_dump)
+#define hash_defn_static(T, T_hashfn, T_init, T_fini, T_eq, T_swap, T_dump) \
+    hash_defn_(T, static, T_hashfn, T_init, T_fini, T_eq, T_swap, T_dump)
 
 #define HASH_FOREACH_(T, p, h, ctx_) \
     for ( \

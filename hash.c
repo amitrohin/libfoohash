@@ -2,7 +2,7 @@
 #include "foo/hash.h"
 
 #ifndef lint
-static const char rcsid[] = "$Id: hash.c,v 1.3 2023/03/02 12:16:38 swp Exp $";
+static const char rcsid[] = "$Id: hash.c,v 1.4 2023/03/07 17:43:17 swp Exp $";
 #endif
 
 #define hash_defn_trivial(T) \
@@ -15,15 +15,8 @@ static const char rcsid[] = "$Id: hash.c,v 1.3 2023/03/02 12:16:38 swp Exp $";
     } \
     static inline void XCONCAT(T,_fini)(T *a) { \
     } \
-    static inline int XCONCAT(T,_cmp)(const T *a, const T *b) { \
-        int rc; \
-        \
-        rc = 0; \
-        if (*a < *b) \
-            rc--; \
-        else if (*a > *b) \
-            rc++; \
-        return rc; \
+    static inline int XCONCAT(T,_eq)(const T *a, const T *b) { \
+        return *a == *b; \
     } \
     static inline void XCONCAT(T,_swap)(T *dst, T *src) { \
         T tmp = *dst; *dst = *src; *src = tmp; \
@@ -32,7 +25,7 @@ static const char rcsid[] = "$Id: hash.c,v 1.3 2023/03/02 12:16:38 swp Exp $";
         fprintf(fp, "%d", *a); \
     } \
     hash_defn(T, XCONCAT(T,_hash), XCONCAT(T,_init), XCONCAT(T,_fini), \
-        XCONCAT(T,_cmp), XCONCAT(T,_swap), XCONCAT(T,_dump))
+        XCONCAT(T,_eq), XCONCAT(T,_swap), XCONCAT(T,_dump))
 
 hash_defn_trivial(int);
 

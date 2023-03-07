@@ -9,23 +9,7 @@ Example of use:
 ```
 #ifndef __MYTYPE_H_INCLUDED__
 #define __MYTYPE_H_INCLUDED__
-
 #include <foo/hash.h>
-
-#if 0
-#define hash_decl(T) \
-    typedef struct hash_s(T) { \
-        int cap; \
-        unsigned int bitmap[]; \
-    } *hash_t(T); \
-    \
-    hash_t(T)   XCONCAT(T, _hash_create)(int cap); \
-    void        XCONCAT(T, _hash_destroy)(hash_t(T) h); \
-    T *         XCONCAT(T, _hash_search)(hash_t(T) *h, T *elm, ACTION action); \
-    void        XCONCAT(T, _hash_remove)(hash_t(T) h, T *elm); \
-    void        XCONCAT(T, _hash_dump)(hash_t(T) h, FILE *fp)
-#endif
-
 typedef struct { long x; } mytype_t;
 hash_decl(mytype_t);
 #endif
@@ -38,7 +22,7 @@ hash_decl(mytype_t);
 /* int  T_hashfn(const T *);
  * int  T_init(T *);
  * void T_fini(T *);
- * int  T_cmp(const T *, const T *);
+ * int  T_eq(const T *, const T *);
  * void T_swap(T *, T *);
  * void T_dump(T *, FILE *);
  */
@@ -51,8 +35,8 @@ static inline int mytype_t_init(mytype_t_t *dst, mytype_t *src) {
 }
 static inline void mytype_t_fini(mytype_t *g) {
 }
-static inline int mytype_t_cmp(const mytype_t *a, const mytype_t *b) {
-    return a->x - b->x;
+static inline int mytype_t_eq(const mytype_t *a, const mytype_t *b) {
+    return a->x == b->x;
 }
 static inline void mytype_t_swap(mytype_t *a, mytype_t *b) {
     mytype_t_t x = *a; *a = *b; *b = x;
@@ -61,7 +45,7 @@ static inline void mytype_t_dump(const mytype_t *g, FILE *fp) {
     fprintf(fp, "%ld", g->x);
 }
 hash_defn(mytype_t_t, mytype_t_hashfn, mytype_t_init, mytype_t_fini, \
-    mytype_t_cmp, mytype_t_swap, mytype_t_dump);
+    mytype_t_eq, mytype_t_swap, mytype_t_dump);
 ```
 
 
@@ -88,6 +72,8 @@ int main() {
 	printf("%ld\n", p->x);
     fputc('\n', stdout);
 
+    printf("count of items: %d\n", hash_popcount(mytype_t, h));
+
     hash_remove(mytype_t, h, &d);
 
     hash_destroy(mytype_t, h);
@@ -97,4 +83,4 @@ int main() {
 }
 ```
 
-`$Id: README.md,v 1.2 2023/03/02 16:58:02 swp Exp $`
+`$Id: README.md,v 1.3 2023/03/07 18:37:06 swp Exp $`

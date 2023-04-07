@@ -143,11 +143,18 @@ _Static_assert(CHAR_BIT == 8, "Only 8 bits byte is supported.");
 #define HASH_DISPATCH(T, Suff)          HASH_DISPATCH_(T, Suff)
 
 #define hash_t(T)                       hash_t
+
 #define hash_create(T, n)               HASH_DISPATCH(T, _hash_create)(n)
 #define hash_destroy(T, h)              HASH_DISPATCH(T, _hash_destroy)(h)
 #define hash_search(T, hp, elm, act)    HASH_DISPATCH(T, _hash_search)(hp, elm, act)
 #define hash_remove(T, h, elm)          HASH_DISPATCH(T, _hash_remove)(h, elm)
 #define hash_dump(T, h, fp)             HASH_DISPATCH(T, _hash_dump)(h, fp)
+
+#define hash_create_(T, n)              XCONCAT(T, _hash_create)(n)
+#define hash_destroy_(T, h)             XCONCAT(T, _hash_destroy)(h)
+#define hash_search_(T, hp, elm, act)   XCONCAT(T, _hash_search)(hp, elm, act)
+#define hash_remove_(T, h, elm)         XCONCAT(T, _hash_remove)(h, elm)
+#define hash_dump_(T, h, fp)            XCONCAT(T, _hash_dump)(h, fp)
 
 typedef struct hash_s {
     int cap;

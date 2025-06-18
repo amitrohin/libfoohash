@@ -32,13 +32,13 @@ struct hash_type hash_type_int = {
 };
 
 int main() {
-    struct hash *hash = hash_create(&hash_type_int, 8);
+    struct hash *hash = hash_create(&hash_type_int, 0);
     assert(hash);
     srand(1);
 
     for (int i = 0; i < 1000; i++) {
-        int k = rand() % ~(-1U<<28);
-        dprintf("%3d. key: %9d, index: %d, cap: %d\n", i, k, k % hash->cap, hash->cap);
+        unsigned k = HASH_KEY(rand());
+        dprintf("%3d. key: %9u, index: %d, cap: %d\n", i, k, k % hash->cap, hash->cap);
         void *p = hash_search(&hash, &k, HASH_ENTER);
         if (!p) {
             dprintf("FAILURE\n");

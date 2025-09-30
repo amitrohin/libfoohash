@@ -5,335 +5,246 @@
 static const char rcsid[] __attribute__((unused)) = "$Id: hash.c,v 1.5 2023/04/07 12:12:38 swp Exp $";
 #endif
 
-static inline size_t hash_align(struct hash_type const *type) {
-    return type->align < alignof(struct hash) ? alignof(struct hash) : type->align;
+extern int hash_chain_first(struct hash *hash, int hindex);
+extern int hash_chain_next(struct hash *hash, int index);
+
+/* Удаление элемента с индексом index из цепочки hindex. pindex - это
+ * предидущий перед index элемент в цепочке или -1, если удаляемый элемент
+ * первый.
+ * Возвращается указатель data.
+ */
+static union hash_data hash_chain_remove(struct hash *hash, int hindex, int pindex, int index) {
+    struct hash_item *item = hash->htab + index;
+    assert(item->in_use);
+    if (pindex != -1) {
+        struct hash_item *pitem = hash->htab + pindex;
+        assert(pitem->in_use);
+        if (item->xoff)
+            pitem->xoff = (pitem->xoff + item->xoff) % hash->cap;
+        else
+            pitem->xoff = 0;
+    } else {
+        struct hash_item *hitem = hash->htab + hindex;
+        if (item->xoff)
+            hitem->hoff = (hitem->hoff + item->xoff) % hash->cap;
+        else
+            hitem->hoff = 0;
+    }
+    item->in_use = 0;
+    return item->data;
+}
+static int hash_getfreeitem(struct hash *hash, int hindex, int *lindex) {
+    int index = -1;
+    int li = -1;
+    for (int len = 0; len < hash->chain_limit; len++) {
+        int i = (hindex + len) % hash->cap;
+        if (hash->htab[i].in_use) {
+            if (hash->htab[i].hkey % hash->cap == hindex)
+                li = i;
+        } else {
+            index = i;
+            *lindex = li;
+            break;
+        }
+    }
+    return index;
+}
+/* Вставка в цепочку hindex элемента хэш-таблицы с индексом index. pindex -
+ * это индекс элемента после которого делается вставка. hkey и data - хэш
+ * данных и сами данные.
+ * [!] Вставляемый элемент должен быть в состоянии in_use == 0.
+ */
+static void hash_chain_insert(
+    struct hash *hash,
+    int hindex,
+    int pindex,
+    int index,
+    uint32_t hkey,
+    union hash_data data
+) {
+    struct hash_item *item = hash->htab + index;
+    assert(!item->in_use);
+    if (pindex != -1) {
+        struct hash_item *pitem = hash->htab + pindex;
+        if (pitem->xoff)
+            item->xoff = pindex + pitem->xoff - index;
+        else
+            item->xoff = 0;
+        pitem->xoff = index - pindex;
+    } else {
+        struct hash_item *hitem = hash->htab + hindex;
+        if (hitem->hoff)
+            item->xoff = hindex + hitem->xoff - index;
+        else
+            item->xoff = 0;
+        hitem->hoff = index - hindex;
+    }
+    item->hkey = hkey;
+    item->data = data;
+    item->in_use = 1;
 }
 
-static inline size_t hash_table_offset(struct hash_type const *type, int cap) {
-    return roundup(offsetof(struct hash, ctl) + sizeof(struct hash_item_ctl) * cap, type->align);
-}
+struct hash *hash_create(struct hash_type const *type, int cap, int chain_limit) {
+    struct hash *hash;
 
-static inline void *hash_table(struct hash *hash) {
-    return (char *)hash + hash_table_offset(hash->type, hash->cap);
-}
-
-struct hash *hash_create(struct hash_type const *type, int cap) {
     if (cap < HASH_CAPMIN)
         cap = HASH_CAPMIN;
-    size_t size = roundup(hash_table_offset(type, cap) + 
-                    cap * type->size, hash_align(type));
-    struct hash *hash = ALIGNED_ALLOC(hash_align(type), size);
+    hash = (type->malloc ? type->malloc : malloc)(
+                offsetof(struct hash, htab) + cap * sizeof(struct hash_item));
     if (hash) {
         hash->type = type;
+        hash->chain_limit = chain_limit;
         hash->cap = cap;
-        memset(hash->ctl, 0, sizeof(struct hash_item_ctl) * cap);
+        memset(hash->htab, 0, cap * sizeof(struct hash_item));
     }
     return hash;
 }
 
-void hash_destroy(struct hash *hash) {
-    if (hash) {
-        void *p;
-        HASH_FOREACH(p, hash)
-            hash->type->fini(p);
-        free(hash);
+void hash_destroy(struct hash **hash, void (*free_data)(union hash_data)) {
+    if (*hash) {
+        struct hash_type const *type = (*hash)->type;
+        if (free_data)
+            for (int i = 0; i < (*hash)->cap; i++) {
+                struct hash_item *item = (*hash)->htab + i;
+                if (!item->in_use)
+                    continue;
+                free_data(item->data);
+            }
+        (type->free ? type->free : free)(*hash);
+        *hash = NULL;
     }
 }
 
-static inline int hash_grow(struct hash **hash) {
-    struct hash *old = *hash, *new = NULL;
-    int cap = old->cap * 2 - 1;
-    new = hash_create(old->type, cap);
-    if (new) {
-        void *p;
-        HASH_FOREACH(p, old)
-            if (!hash_search(&new, p, HASH_ENTER))
-                goto E0;
+static int hash_grow(struct hash **hash) {
+    struct hash *new = hash_create((*hash)->type, (*hash)->cap * 2 - 1,
+                            (*hash)->chain_limit);
+    if (!new)
+        goto E0;
+    for (int i = 0; i < (*hash)->cap; i++) {
+        struct hash_item *item = (*hash)->htab + i;
+        if (!item->in_use)
+            continue;
+        if (hash_search(&new, item->data, HASH_ENTER, NULL) < 0)
+            goto E1;
     }
-    hash_destroy(old);
+    hash_destroy(hash, NULL);
     *hash = new;
     return 1;
 
-E0: if (new)
-        hash_destroy(new);
-    return 0;
+E1: hash_destroy(&new, NULL);
+E0: return 0;
 }
 
-void *hash_search(struct hash **hash, void *data, enum hash_action action) {
-    struct hash_iter iter;
-    void *item, *place, *free_place = NULL;
-    unsigned key, k;
-    enum hash_item_state state;
+int hash_search(struct hash **hash, union hash_data data,
+        enum hash_action action, union hash_data *hdata)
+{
+    struct hash_type const *type = (*hash)->type;
+    uint32_t hkey = type->hashfn(data);
+    int hindex, pindex, index;
+    struct hash_item *item;
+    int retcode;
 
-    key = HASH_KEY((*hash)->type->hashfn(data));
+    retcode = 0;
 L_restart:
-    hash_iter_init(&iter, *hash, key);
-    while (1) {
-        item = hash_iter_get(&iter, HASH_ITER_KEY, HASH_ITER_FORWARD,
-                    &place, &k, &state);
-        if (!item)
-            break;
-        if (state == HASH_ITEM_NOOP) {
-            if (!free_place)
-                free_place = place;
+    item = NULL;
+    hindex = hkey % (*hash)->cap;
+    pindex = -1;
+    index = hash_chain_first(*hash, hindex);
+    while (index != -1) {
+        item = (*hash)->htab + index;
+        if (item->hkey == hkey && type->item_eq(item->data, data)) {
+            if (hdata)
+                *hdata = item->data;
+            retcode = 1;
             break;
         }
-        if (state == HASH_ITEM_FREE) {
-            if (!free_place)
-                free_place = place;
-            continue;
-        }
-        assert(state == HASH_ITEM_USED);
-        if (k == key && iter.hash->type->eq(item, data))
-            goto L0;
+        pindex = index;
+        index = hash_chain_next(*hash, index);
     }
     if (action == HASH_FIND)
-        goto L0;
-    if (action == HASH_REMOVE) {
-        if (!item)
-            goto L0;
-        int index = ((char *)item - (char *)iter.table) / iter.hash->type->size;
-        assert(index >= 0);
-        assert(index < iter.hash->cap);
-        if (iter.hash->type->fini)
-            iter.hash->type->fini(item);
-        iter.hash->ctl[index].key = 0;
-        iter.hash->ctl[index].state = HASH_ITEM_FREE;
-        goto L0;
-    }
-    assert(action == HASH_ENTER);
-    if (free_place) {
-        if (iter.hash->type->copy) {
-            if (iter.hash->type->copy(free_place, data) != 0)
-                goto L0;
-        } else
-            memcpy(free_place, data, iter.hash->type->size);
-        int index = ((char *)free_place - (char *)iter.table) / iter.hash->type->size;
-        assert(index >= 0);
-        assert(index < iter.hash->cap);
-        iter.hash->ctl[index].key = key;
-        iter.hash->ctl[index].state = HASH_ITEM_USED;
-        item = free_place;
-        goto L0;
-    }
-    if (hash_grow(hash))
-        goto L_restart;
-
-L0: return item;
-}
-
-void hash_iter_init(struct hash_iter *iter, struct hash *hash, unsigned key) {
-    iter->advance = 0;
-    iter->index = iter->index_key = HASH_KEY(key) % hash->cap;
-    iter->table = hash_table(hash);
-    iter->hash = hash;
-}
-
-void *hash_iter_get(
-    struct hash_iter *          iter,
-    enum hash_iter_mode         mode,
-    enum hash_iter_direction    direction,
-    void **                     place,
-    unsigned *                  key,
-    enum hash_item_state *      state)
-{
-    void *p = NULL;
-
-    if (mode == HASH_ITER_KEY) {
-        int index = iter->index;
-        int shift = index - iter->index_key;
-        if (shift < 0) 
-            shift += iter->hash->cap;
-        if (iter->advance)
-    L_advance_iter_key:
-            if (direction == HASH_ITER_FORWARD) {
-                if (iter->hash->ctl[iter->index].state == HASH_ITEM_NOOP)
-                    goto L0;
-                index++;
-                shift++;
-            } else {
-                index--;
-                shift--;
-            }
-        else
-            iter->advance = 1;
-        if (shift == HASH_SCHLIM || shift == -1)
-            goto L0; 
-        iter->index = index % iter->hash->cap;
-        if (iter->hash->ctl[iter->index].state == HASH_ITEM_USED &&
-                iter->hash->ctl[iter->index].key % iter->hash->cap != iter->index_key)
-            goto L_advance_iter_key;
-        p = (char *)iter->table + iter->index * iter->hash->type->size;
-
-    } else if (mode == HASH_ITER_USED) {
-        if (iter->advance)
-    L_advance:
-            if (direction == HASH_ITER_FORWARD) {
-                if (iter->index == iter->hash->cap)
-                    goto L0;
-                iter->index++;
-            } else {
-                if (!iter->index)
-                    goto L0;
-                iter->index--;
-            }
-        else
-            iter->advance = 1;
-        if (iter->hash->ctl[iter->index].state != HASH_ITEM_USED)
-            goto L_advance;
-        p = (char *)iter->table + iter->index * iter->hash->type->size;
-
+        ;
+    else if (action == HASH_REMOVE) {
+        if (index != -1)
+            hash_chain_remove(*hash, hindex, pindex, index);
     } else {
-        assert(mode == HASH_ITER_ALL);
-        if (iter->advance)
-            if (direction == HASH_ITER_FORWARD) {
-                if (iter->index == iter->hash->cap)
+        assert(action == HASH_ENTER);
+        if (index == -1) {
+            int lindex, free_index = hash_getfreeitem(*hash, hindex, &lindex);
+            if (free_index == -1) {
+                if (!hash_grow(hash)) {
+                    retcode = -1;
                     goto L0;
-                iter->index++;
-            } else {
-                if (!iter->index)
-                    goto L0;
-                iter->index--;
+                }
+                assert(!retcode);
+                goto L_restart;
             }
-        else
-            iter->advance = 1;
-        p = (char *)iter->table + iter->index * iter->hash->type->size;
+            hash_chain_insert(*hash, hindex, lindex, free_index, hkey, data);
+        }
     }
-
-L0: if (p) {
-        if (place)
-            *place = p;
-        if (key)
-            *key = iter->hash->ctl[iter->index].key;
-        if (state)
-            *state = iter->hash->ctl[iter->index].state;
-    } else
-        if (iter->index > 0 && iter->index < iter->hash->cap) {
-            if (place)
-                *place = (char *)iter->table + iter->index * iter->hash->type->size;
-            if (key)
-                *key = iter->hash->ctl[iter->index].key;
-            if (state)
-                *state = iter->hash->ctl[iter->index].state;
-        } else {
-            if (place)
-                *place = NULL;
-            if (key)
-                *key = 0;
-            if (state)
-                *state = HASH_ITEM_UNKNOWN;
-        }
-    return p;
+L0: return retcode;
 }
 
-static char const *hash_item_state_string_map[] = {
-    [HASH_ITEM_NOOP] = "HASH_ITEM_NOOP",
-    [HASH_ITEM_USED] = "HASH_ITEM_USED",
-    [HASH_ITEM_FREE] = "HASH_ITEM_FREE",
-};
-static inline 
-char const *get_hash_item_state_string(enum hash_item_state state) {
-    assert(state >= HASH_ITEM_NOOP && state <= HASH_ITEM_FREE);
-    return hash_item_state_string_map[state];
-}
-void hash_dump(struct hash *hash, FILE *fp) {
+void hash_dump(struct hash **hash_p, FILE *fp) {
+    struct hash *hash = *hash_p;
     fprintf(fp,
-            "struct hash *hash = %p -> {\n"
-            "   struct hash_type *type = %p -> {\n"
-            "       size_t size  = %3zu,\n"
-            "       size_t align = %3zu,\n"
-            "       ...\n"
+            "struct hash ** = %p -> *%p {\n"
+            "   .type = (struct hash_type *) %p -> {\n"
+            "       .name = (char const *) %s,\n"
             "   },\n"
-            "   int cap = %d,\n"
-            "   struct hash_item_ctl ctl[] = %p -> {\n"
-            , hash
+            "   .chain_limit = (int) %d,\n"
+            "   .cap = (int) %d,\n"
+            "   .htab = (struct hash_item []) {\n"
+            , hash_p, hash
             , hash->type
-            , hash->type->size
-            , hash->type->align
-            , hash->cap
-            , hash->ctl);
-    for (int i = 0; i < hash->cap; i++) {
-        if (hash->ctl[i].state == HASH_ITEM_NOOP)
+            , hash->type->name
+            , hash->chain_limit
+            , hash->cap);
+    for (int hindex = 0; hindex < hash->cap; hindex++) {
+        struct hash_item *hitem = hash->htab + hindex;
+        if (!hitem->hoff && (!hitem->in_use || 
+                hitem->hkey % hash->cap != hindex))
             continue;
-        int count = 0, pathlen_exists = 0, pathlen_notexists = 0;
-        for (int j = 0; j < HASH_SCHLIM; j++) {
-            unsigned k = (i + j) % hash->cap;
-            if (hash->ctl[k].state == HASH_ITEM_NOOP)
-                break;
-            pathlen_notexists++;
-            if (hash->ctl[k].state == HASH_ITEM_FREE)
-                continue;
-            if (hash->ctl[k].key % hash->cap == i) {
-                pathlen_exists = pathlen_notexists;
-                count++;
-            }
+        int count = 0;
+        int len = 0;
+        for (int index = hash_chain_first(hash, hindex);
+                index != -1; index = hash_chain_next(hash, index)) {
+            count++;
+            len = index - hindex;
+            if (len < 0)
+                len += hash->cap;
         }
-        if (!count)
-            continue;
         fprintf(fp,
-            "       [%4d] = {", i);
-        for (int j = 0, first = 1; j < HASH_SCHLIM; j++) {
-            unsigned k = (i + j) % hash->cap;
-            if (hash->ctl[k].state == HASH_ITEM_NOOP)
-                break;
-            if (hash->ctl[k].state == HASH_ITEM_FREE)
-                continue;
-            if (hash->ctl[k].key % hash->cap == i) {
-                fprintf(fp, "%s[%4d]={%9u, %s}",
-                    first ? "" : ", ",
-                    k, hash->ctl[k].key, 
-                    get_hash_item_state_string(hash->ctl[k].state)
-                );
-                first = 0;
+            "       [%d] = (lst[%d], len=%d) {",
+            hindex, count, len);
+        int index = hash_chain_first(hash, hindex);
+        if (index != -1) {
+            struct hash_item *item = hash->htab + index;
+            fprintf(fp, "[%d]={hkey=%" PRIu32 "[%d], "
+                , index
+                , item->hkey
+                , item->hkey % hash->cap);
+            if (hash->type->item_dump)
+                hash->type->item_dump(item->data, fp);
+            fprintf(fp, "}");
+            for (;;) {
+                index = hash_chain_next(hash, index);
+                if (index == -1)
+                    break;
+                item = hash->htab + index;
+                fprintf(fp, ", [%d]={hkey=%" PRIu32 "[%d], "
+                    , index
+                    , item->hkey
+                    , item->hkey % hash->cap);
+                if (hash->type->item_dump)
+                    hash->type->item_dump(item->data, fp);
+                fprintf(fp, "}");
             }
         }
-        fprintf(fp, "}, # count: %2d, pathlen: good=%2d/bad=%2d\n",
-            count, pathlen_exists, pathlen_notexists);
+        fprintf(fp, "},\n");
     }
     fprintf(fp,
             "   },\n"
             "};\n");
 }
 
-
-#if 0
-#define hash_defn_trivial(T) \
-    static inline int XCONCAT(T,_hash)(const T *a) { \
-        return (*a * 5ull + 13) % INT_MAX; \
-    } \
-    static inline int XCONCAT(T,_init)(T *dst, T *src) { \
-        *dst = *src; \
-        return 0; \
-    } \
-    static inline void XCONCAT(T,_fini)(T *a __attribute__((unused))) { \
-    } \
-    static inline int XCONCAT(T,_eq)(const T *a, const T *b) { \
-        return *a == *b; \
-    } \
-    static inline void XCONCAT(T,_swap)(T *dst, T *src) { \
-        T tmp = *dst; *dst = *src; *src = tmp; \
-    } \
-    static inline void XCONCAT(T,_dump)(T *a, FILE *fp) { \
-        fprintf(fp, _Generic((*a), \
-                         short          : "%hd", \
-                unsigned short          : "%hu", \
-                         int            : "%d", \
-                unsigned int            : "%u", \
-                         long int       : "%ld", \
-                unsigned long int       : "%lu", \
-                         long long int  : "%lld", \
-                unsigned long long int  : "%llu"), \
-            *a); \
-    } \
-    hash_defn(T, XCONCAT(T,_hash), XCONCAT(T,_init), XCONCAT(T,_fini), \
-        XCONCAT(T,_eq), XCONCAT(T,_swap), XCONCAT(T,_dump))
-
-hash_defn_trivial( int16_t);
-hash_defn_trivial(uint16_t);
-hash_defn_trivial( int32_t);
-hash_defn_trivial(uint32_t);
-hash_defn_trivial( int64_t);
-hash_defn_trivial(uint64_t);
-#endif
-
-// vi: ts=4:sts=4:sw=4:et
+// vi: ts=4:sts=4:sw=4:et:tw=78

@@ -1,53 +1,54 @@
 #include <stdlib.h>
 #include <assert.h>
+#include <time.h>
 #include <foo/hash.h>
 
 #define dprintf(fmt, ...) \
-    fprintf(stderr, "%s(),%d: " fmt, __func__, __LINE__, ##__VA_ARGS__)
+    fprintf(stdout, "%s(),%d: " fmt, __func__, __LINE__, ##__VA_ARGS__)
 
-unsigned int_nohashfn(void const *p) {
-    return HASH_KEY(*(unsigned const *)p);
+static uint32_t int_hashfn(const union hash_data data) {
+    return data.d * 7 + 1;
 }
-int int_init(void *p) {
-    *(int *)p = 0;
-    dprintf("%p -> %d\n", p, *(int *)p);
-    return 0;
+static int int_eq(const union hash_data a, const union hash_data b) {
+    return a.d == b.d;
 }
-void int_fini(void *p) {
-    dprintf("%p -> %d\n", p, *(int *)p);
+static void int_dump(const union hash_data data, FILE *fp) {
+    fprintf(fp, "%d", data.d);
 }
-int int_eq(void const *a, void const *b) {
-    return *(int const *)a == *(int const *)b;
-}
-
 struct hash_type hash_type_int = {
-    .size   = sizeof(int),
-    .align  = alignof(int),
-    .hashfn = int_nohashfn,
-    .init   = int_init,
-    .fini   = int_fini,
-    .eq     = int_eq,
-    .swap   = NULL,
-    .dump   = NULL,
+    .malloc     = malloc,
+    .free       = free,
+    .hashfn     = int_hashfn,
+    .item_eq    = int_eq,
+    .item_dump  = int_dump,
+    .name       = "hash_type_int",
 };
 
-int main() {
-    struct hash *hash = hash_create(&hash_type_int, 0);
+int main(int argc, char *argv[]) {
+    long seed = strtol(argv[1], 0, 0);
+
+    struct hash *hash = hash_create(&hash_type_int, 0, 4);
     assert(hash);
-    srand(1);
+    srand(seed);
 
     for (int i = 0; i < 1000; i++) {
-        unsigned k = HASH_KEY(rand());
-        dprintf("%3d. key: %9u, index: %d, cap: %d\n", i, k, k % hash->cap, hash->cap);
-        void *p = hash_search(&hash, &k, HASH_ENTER);
-        if (!p) {
-            dprintf("FAILURE\n");
-            break;
+        union hash_data data;
+        data.d = rand() % 10000;
+        if (i < 5 || rand() % 2) {
+            dprintf("%3d. +%d\n", i, data.d);
+            if (hash_search(&hash, data, HASH_ENTER, NULL) < 0) {
+                dprintf("FAILURE\n");
+                break;
+            }
+        } else {
+            dprintf("%3d. -%d\n", i, data.d);
+            hash_search(&hash, data, HASH_REMOVE, NULL);
         }
-        hash_dump(hash, stderr);
+        hash_dump(&hash, stdout);
+        printf("\n");
     }
-
-    hash_destroy(hash);
+    hash_destroy(&hash, NULL);
+    return 0;
 }
 
 // vi: ts=4:sts=4:sw=4:et

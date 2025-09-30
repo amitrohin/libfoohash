@@ -6,12 +6,29 @@ HDIR = include/
 SRCS = $(filter-out test%, $(wildcard *.c *.y $(HDIR)foo/*.h))
 #MANS = zma.3 rbtree.3
 
-#CFLAGS = -march=native -O2 -pipe -D_GNU_SOURCE
-CFLAGS = -march=native -g -O0 -pipe -D_GNU_SOURCE
+#CFLAGS = -march=native -O2 -pipe -D_GNU_SOURCE -ferror-limit=3
+CFLAGS = -march=native -g -O0 -pipe -D_GNU_SOURCE -ferror-limit=3 -Wall
 #CPPFLAGS = -DNDEBUG -I. -I$(HDIR) -I/usr/include -I/usr/local/include
 CPPFLAGS = -I. -I$(HDIR) -I/usr/include -I/usr/local/include
 LDFLAGS = -L/usr/lib -L/usr/local/lib
 LDLIBS = -lm -lpthread
+
+ASAN = 1
+UBSAN = 1
+
+ifneq ($(ASAN),)
+CFLAGS += -fsanitize=address
+LDFLAGS += -fsanitize=address
+endif
+ifneq ($(UBSAN),)
+CFLAGS += -fsanitize=undefined
+LDFLAGS += -fsanitize=undefined
+endif
+
+ifneq ($(WITH_GPROF),)
+CFLAGS += -pg
+LDFLAGS += -pg
+endif
 
 OBJDIR = obj
 LIB_STATIC = lib$(LIBNAME).a
@@ -34,7 +51,7 @@ DIRS += $(abspath $(INCLUDEDIR))
 DIRS += $(abspath $(MANDIR))
 
 CC = cc
-LD = ld
+LD = $(CC)
 YACC = bison
 YFLAGS = 
 INSTALL = install
@@ -114,7 +131,7 @@ foo:
 	@echo "DIRS  = $(DIRS)"
 
 $(OBJDIR)/$(LIB_STATIC): $(OBJS_STATIC); $(AR) -cr $@ $^ && ranlib -U $@
-$(OBJDIR)/$(LIB_SHARED): $(OBJS_SHARED); $(LD) -shared -x $(LDFLAGS) $^ $(LDLIBS) -o $@
+$(OBJDIR)/$(LIB_SHARED): $(OBJS_SHARED); $(LD) -shared -fpic -fno-lto $(LDFLAGS) $^ $(LDLIBS) -o $@
 
 $(sort $(DIRS)):; mkdir -p $@
 $(DEPS):
@@ -153,25 +170,26 @@ clean:
 			$(OBJS_STATIC) \
 			$(OBJDIR)/$(LIB_STATIC) \
 			$(OBJS_SHARED) \
-			$(OBJDIR)/$(LIB_SHARED); \
+			$(OBJDIR)/$(LIB_SHARED) \
+			$(OBJS) $(TESTS); \
 	do \
 		unlink $$f 2>/dev/null && echo "unlink $$f"; \
 	done
 
 TESTS_SRCS = $(wildcard test*.c test/*.c)
-TESTS := $(TESTS_SRCS:%.c=%)
 
 define mk_test_rules =
 $$(OBJDIR)/$1.o: $1.c | $$(abspath $$(OBJDIR)/$(dir $1)); $(call c2o_recipe)
 $$(OBJDIR)/$1: .EXTRA_PREREQS = $$(OBJDIR)/$$(LIB_STATIC) $$(OBJDIR)/$$(LIB_SHARED)
-$$(OBJDIR)/$1: $$(OBJDIR)/$1.o ; $$(CC) -Wl,-rpath=$$(OBJDIR) -L$$(OBJDIR) -l$$(LIBNAME) $$^ -o $$@
-OBJS.$1 += $$(OBJDIR)/$1.o
+$$(OBJDIR)/$1: $$(OBJDIR)/$1.o ; $$(CC) -Wl,-rpath=$$(realpath $$(OBJDIR)) -L$$(OBJDIR) $$(LDFLAGS) $$^ -l$$(LIBNAME) -o $$@
+TESTS += $$(OBJDIR)/$1
+OBJS += $$(OBJDIR)/$1.o
 DEPS += $$(OBJDIR)/$1.o.depend
 DIRS += $$(abspath $$(OBJDIR)/$(dir $1))
 endef
-$(foreach T,$(TESTS),$(eval $(call mk_test_rules,$T)))
+$(foreach T,$(TESTS_SRCS:%.c=%),$(eval $(call mk_test_rules,$T)))
 
 .PHONY: tests
-tests: $(addprefix $(OBJDIR)/,$(TESTS))
+tests: $(TESTS)
 
 
